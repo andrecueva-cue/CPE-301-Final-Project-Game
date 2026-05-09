@@ -1,0 +1,74 @@
+// C++ code
+//
+unsigned long previousMillis = 0;
+const long minInterval = 60000;
+unsigned long previousFlash = 0;
+const long flashInterval = 1000;
+int minutesElapsed = 0;
+int flashCount = 1;
+int state;
+
+void setup()
+{
+//PIN ASSIGNMENT We need to change it to manual pin registers but that comes later tbh
+  pinMode(10, OUTPUT);
+  pinMode(11, OUTPUT);
+  pinMode(12, OUTPUT);
+  pinMode(13, OUTPUT);
+  Serial.begin(9600);
+  Serial.println("Timer Started: 0");
+}
+
+// Display Output Requirement 
+void loop()
+{
+  // Display Output Requirement (TIMER 1 MINUTE) - Prints Minutes Elapsed, Could use it to control the LED flashing
+  unsigned long currentMillis = millis();
+  if(currentMillis - previousMillis >= minInterval){
+    previousMillis = currentMillis;
+    minutesElapsed++;
+    Serial.print("Minutes Elapsed:" );
+	Serial.println(minutesElapsed);
+  }
+// State Creation: We gotta figure this part out
+  state = 4;
+  switch(state){
+    // OFF State
+    case 1:
+     digitalWrite(13, HIGH);
+    	break;
+    //IDLE State
+    case 2:
+    digitalWrite(13, LOW);
+    
+    	break;
+   //Active State
+    case 3:
+    	break;
+    //Error State
+    case 4:
+    error();
+      break;
+  
+  
+  }
+}
+void off(){
+  digitalWrite(13, HIGH);
+}
+///Im trying to make flashing LED here but it might be easier to make it in the main and have a continuous 1 second timer that runs that we can switch to and use to change the light flashes
+void error(){
+  unsigned long currentFlash = millis();
+  if(currentFlash - previousFlash >= flashInterval){
+    flashCount++;
+  }
+  if (flashCount % 2 == 0){
+      digitalWrite(13, HIGH);
+  }
+  if (flashCount % 2 != 0){
+     digitalWrite(13, LOW);
+  }
+  
+}
+
+
