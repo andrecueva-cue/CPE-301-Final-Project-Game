@@ -11,10 +11,12 @@ Digital Pins:
   blue LED: 10
   ON botton: 18
   Off botton: 19
-  Reset Botton: 20
+  Reset Botton: 30
   Temp module: 12
   Buzzer: 11
   Fan: 13
+  RTC SDA:20
+  RTC SCL=21
 Analog Pins:
   Vrx = 1
   Vry = 0
