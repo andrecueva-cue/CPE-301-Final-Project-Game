@@ -1,5 +1,9 @@
 All Pin locations being used
 Digital Pins:
   Keypad: 46-53
-  LCD:    
+  LCD RS: 2
+  LCD E:  3
+  LCD D4-D7: 4-7
+  Corner LEDS: 22-25
+  Corner Buttons: 26-29
   
