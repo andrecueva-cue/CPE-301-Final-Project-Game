@@ -6,4 +6,12 @@ Digital Pins:
   LCD D4-D7: 4-7
   Corner LEDS: 22-25
   Corner Buttons: 26-29
+  Green LED: 8
+  Red LED: 9
+  blue LED: 10
+  ON botton: 31
+  Off botton: 30
+  Temp module: 12
+  Buzzer: 11
+  Fan: 13
   
