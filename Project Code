@@ -91,6 +91,28 @@ int p3Wins = 0;
 int p4Wins = 0;
 unsigned long lastReaction = 0;
 
+enum GameState {
+  WAIT_START,
+  SELECT_PLAYERS,
+  SELECT_ROUNDS,
+  COUNTDOWN,
+  WAIT_FOR_REACTION,
+  SHOW_WINNER,
+  SYSTEM_OFF,
+  ERROR_STATE
+};
+
+GameState state = WAIT_START;
+int numPlayers = 0;
+int numRounds = 0;
+int currentRound = 0;
+
+// Mapping Enum to Strings for logging
+const char* stateStrings[] = {
+  "WAIT_START", "SELECT_PLAYERS", "SELECT_ROUNDS", "COUNTDOWN",
+  "WAIT_FOR_REACTION", "SHOW_WINNER", "SYSTEM_OFF", "ERROR_STATE"
+};
+
 void uart_init(unsigned int baud) {
   unsigned int ubrr = 16000000 / 16 / baud - 1;
   *myUBRR0 = ubrr;
@@ -175,37 +197,69 @@ unsigned char bcd_to_dec(unsigned char val) {
   return (val / 16 * 10) + (val % 16);
 }
 
-void logData() {
+// ---------------------------------------------------------
+// NEW LOGGING SYSTEM
+// ---------------------------------------------------------
+
+void printTimestamp() {
+  twi_start();
+  twi_write(0xD0);
+  twi_write(0x00);
+  twi_start();
+  twi_write(0xD1);
+  unsigned char sec = bcd_to_dec(twi_read_ack() & 0x7F);
+  unsigned char min = bcd_to_dec(twi_read_ack());
+  unsigned char hr = bcd_to_dec(twi_read_nack() & 0x3F);
+  twi_stop();
+
+  uart_print("[");
+  uart_print_num(hr); uart_print(":");
+  if(min < 10) uart_print("0"); 
+  uart_print_num(min); uart_print(":");
+  if(sec < 10) uart_print("0"); 
+  uart_print_num(sec); 
+  uart_print("] ");
+}
+
+void logEvent(const char* category, const char* details) {
+  printTimestamp();
+  uart_print(category);
+  uart_print(": ");
+  uart_print(details);
+  uart_print("\r\n");
+}
+
+void changeState(GameState newState) {
+  if (state != newState) {
+    printTimestamp();
+    uart_print("TRANSITION: ");
+    uart_print(stateStrings[state]);
+    uart_print(" -> ");
+    uart_print(stateStrings[newState]);
+    uart_print("\r\n");
+    state = newState;
+  }
+}
+
+void logPeriodicData() {
   if (millis() - lastLogTime >= 60000) {
     lastLogTime = millis();
     
-    twi_start();
-    twi_write(0xD0);
-    twi_write(0x00);
-    twi_start();
-    twi_write(0xD1);
-    unsigned char sec = bcd_to_dec(twi_read_ack() & 0x7F);
-    unsigned char min = bcd_to_dec(twi_read_ack());
-    unsigned char hr = bcd_to_dec(twi_read_nack() & 0x3F);
-    twi_stop();
-
-    uart_print("RTC: ");
-    uart_print_num(hr); uart_print(":");
-    uart_print_num(min); uart_print(":");
-    uart_print_num(sec); uart_print("\r\n");
-    
+    printTimestamp();
+    uart_print("--- PERIODIC SYSTEM LOG ---\r\n");
     uart_print("WINS -> P1: "); uart_print_num(p1Wins);
     uart_print(" | P2: "); uart_print_num(p2Wins);
     uart_print(" | P3: "); uart_print_num(p3Wins);
     uart_print(" | P4: "); uart_print_num(p4Wins);
-    uart_print("\r\n");
-    
-    uart_print("Last Reaction: "); 
+    uart_print("\r\nLast Reaction: "); 
     uart_print_num(lastReaction); 
     uart_print(" ms\r\n");
-    uart_print("-------------------------\r\n");
+    uart_print("Current State: ");
+    uart_print(stateStrings[state]);
+    uart_print("\r\n---------------------------\r\n");
   }
 }
+// ---------------------------------------------------------
 
 void my_delay(unsigned int freq) {
   double period = 1.0/double(freq);
@@ -302,23 +356,9 @@ void setup() {
   OCR2B = 0;
   
   twi_init();
+  
+  logEvent("SYSTEM", "Boot successful.");
 }
-
-enum GameState {
-  WAIT_START,
-  SELECT_PLAYERS,
-  SELECT_ROUNDS,
-  COUNTDOWN,
-  WAIT_FOR_REACTION,
-  SHOW_WINNER,
-  SYSTEM_OFF,
-  ERROR_STATE
-};
-
-GameState state = WAIT_START;
-int numPlayers = 0;
-int numRounds = 0;
-int currentRound = 0;
 
 void checkGlobalButtons() {
   static bool systemCurrentlyOff = false;
@@ -327,13 +367,13 @@ void checkGlobalButtons() {
   bool buttonIsPressed = !(*pin_d & (0x01 << 2));
 
   if (buttonIsPressed && !buttonWasPressed) { 
-    
     if (!systemCurrentlyOff) {
       lcd.clear();
       *port_a &= ~(0x0F); 
       *port_b &= ~((0x01 << 4) | (0x01 << 5) | (0x01 << 6)); 
       *port_h &= ~((0x01 << 5) | (0x01 << 6)); 
-      state = SYSTEM_OFF;
+      changeState(SYSTEM_OFF);
+      logEvent("HARDWARE", "Main Button Pressed (System Sleep)");
       systemCurrentlyOff = true;
     } else {
       lcd.clear();
@@ -354,10 +394,10 @@ void checkGlobalButtons() {
       winnerDrawn = false;
       errorDrawn = false;
       
-      state = WAIT_START;
+      changeState(WAIT_START);
+      logEvent("HARDWARE", "Main Button Pressed (System Wake)");
       systemCurrentlyOff = false;
     }
-    
     timer1_delay_ms(200); 
   }
 
@@ -379,7 +419,8 @@ void checkGlobalButtons() {
        winnerDrawn = false;
        errorDrawn = false;
        
-       state = SELECT_PLAYERS;
+       logEvent("HARDWARE", "Reset Button Pressed");
+       changeState(SELECT_PLAYERS);
     }
   }
 }
@@ -407,6 +448,8 @@ void handleError() {
     lcd.setCursor(0, 1);
     lcd.print("Restarting...");
     
+    logEvent("ERROR", "Fault State Displayed to User");
+    
     errorStartTime = millis();
     errorDrawn = true;
   }
@@ -420,11 +463,13 @@ void handleError() {
     currentRound = 0;
     lcd.clear();
     startDrawn = false;
-    state = WAIT_START;
+    changeState(WAIT_START);
   }
 }
 
 void updateFanSpeed() {
+  static bool fanIsCurrentlyOn = false; // Prevents log flooding
+  
   if (fanModeEnabled && state == WAIT_START) {
     byte y_val = readAnalogAxisLevel(VRY_CH); 
 
@@ -432,17 +477,21 @@ void updateFanSpeed() {
       int speed = (y_val - 140) * 2;
       if (speed > 255) speed = 255;
       OCR2B = speed; 
+      if (!fanIsCurrentlyOn) { logEvent("ACTUATOR", "Fan PWM Started (Forward)"); fanIsCurrentlyOn = true; }
     } 
     else if (y_val < 110) {
       int speed = (110 - y_val) * 2;
       if (speed > 255) speed = 255;
       OCR2B = speed;
+      if (!fanIsCurrentlyOn) { logEvent("ACTUATOR", "Fan PWM Started (Reverse)"); fanIsCurrentlyOn = true; }
     } 
     else {
       OCR2B = 0; 
+      if (fanIsCurrentlyOn) { logEvent("ACTUATOR", "Fan PWM Stopped"); fanIsCurrentlyOn = false; }
     }
   } else {
     OCR2B = 0; 
+    if (fanIsCurrentlyOn) { logEvent("ACTUATOR", "Fan PWM Disabled (State changed)"); fanIsCurrentlyOn = false; }
   }
 }
 
@@ -475,18 +524,18 @@ void handleStart() {
   if (key == 'B') {
     fanModeEnabled = !fanModeEnabled;
     startDrawn = false;
+    logEvent("SETTINGS", fanModeEnabled ? "Fan Mode Enabled" : "Fan Mode Disabled");
   }
 
   if (startButtonPressed()) {
     *port_b &= ~(0x01 << 4);
     *port_h |= (0x01 << 5);
     startDrawn = false;
-    state = SELECT_PLAYERS;
+    changeState(SELECT_PLAYERS);
   }
 }
 
 void handlePlayerSelect() {
-  
   if (!playerDrawn) {
     lcd.clear();
     lcd.print("PLAYERS 1-4:");
@@ -502,7 +551,8 @@ void handlePlayerSelect() {
     timer1_delay_ms(2000);
     
     playerDrawn = false;
-    state = SELECT_ROUNDS;
+    logEvent("SETTINGS", "Player Count Confirmed");
+    changeState(SELECT_ROUNDS);
   }
 }
 
@@ -524,7 +574,8 @@ void handleRoundSelect() {
     timer1_delay_ms(2000);
     
     roundScreenDrawn = false;
-    state = COUNTDOWN;
+    logEvent("SETTINGS", "Round Count Confirmed");
+    changeState(COUNTDOWN);
   }
 }
 
@@ -540,7 +591,8 @@ void handleCountdown() {
       lcd.print("FALSE START!");
       timer1_delay_ms(1500);
       
-      state = ERROR_STATE;
+      logEvent("ERROR", "False start triggered during countdown");
+      changeState(ERROR_STATE);
       return;
     }
 
@@ -548,13 +600,13 @@ void handleCountdown() {
     lcd.print("ROUND BEGINS: ");
     lcd.print(i);
     timer1_delay_ms(500);
-    *port_h |= (0x01 << 5);
+    *port_h |= (0x01 << 5); // Warning LED/Buzzer ON
     timer1_delay_ms(500);
-    *port_h &= ~(0x01 << 5);
+    *port_h &= ~(0x01 << 5); // Warning LED/Buzzer OFF
   }
   
   *port_h |= (0x01 << 5);
-  state = WAIT_FOR_REACTION;
+  changeState(WAIT_FOR_REACTION);
 }
 
 void handleReactionGame() {
@@ -564,6 +616,7 @@ void handleReactionGame() {
     lcd.clear();
     lcd.print("GO!");
     
+    logEvent("ACTUATOR", "Buzzer sequence started");
     for(int i = 0; i < 100; i++){ 
         *port_b |= (0x01 << 5);
         my_delay(750);
@@ -603,10 +656,12 @@ void handleReactionGame() {
     lcd.print("TIME: ");
     lcd.print(reactionTime);
     lcd.print(" ms");
+    
+    logEvent("GAMEPLAY", "Player reacted to prompt");
     timer1_delay_ms(1500); 
 
     gameStarted = false; 
-    state = SHOW_WINNER;
+    changeState(SHOW_WINNER);
   }
 }
 
@@ -617,15 +672,19 @@ void handleWinner() {
     if (player == 1) {
       *port_a |= (0x01 << 0);
       p1Wins++;
+      logEvent("ACTUATOR", "P1 Win LED ON");
     } else if (player == 2) {
       *port_a |= (0x01 << 1);
       p2Wins++;
+      logEvent("ACTUATOR", "P2 Win LED ON");
     } else if (player == 3) {
       *port_a |= (0x01 << 2);
       p3Wins++;
+      logEvent("ACTUATOR", "P3 Win LED ON");
     } else if (player == 4) {
       *port_a |= (0x01 << 3);
       p4Wins++;
+      logEvent("ACTUATOR", "P4 Win LED ON");
     }
 
     lcd.clear();
@@ -641,10 +700,11 @@ void handleWinner() {
   if (millis() - displayStartTime >= 3000) {
     winnerDrawn = false;
     *port_a &= ~(0x0F); 
+    logEvent("ACTUATOR", "Win LEDs Disabled");
     
     if (currentRound < numRounds) {
       currentRound++;
-      state = COUNTDOWN; 
+      changeState(COUNTDOWN); 
     } else {
       lcd.clear();
       lcd.print("GAME OVER!");
@@ -652,7 +712,7 @@ void handleWinner() {
       timer1_delay_ms(2000);
       
       startDrawn = false;
-      state = WAIT_START; 
+      changeState(WAIT_START); 
     }
   }
 }
@@ -660,7 +720,7 @@ void handleWinner() {
 void loop() {
   checkGlobalButtons();
   updateFanSpeed();
-  logData();
+  logPeriodicData(); 
   
   switch(state){
     case WAIT_START:
