@@ -1,74 +1,413 @@
-// C++ code
-//
-unsigned long previousMillis = 0;
-const long minInterval = 60000;
-unsigned long previousFlash = 0;
-const long flashInterval = 1000;
-int minutesElapsed = 0;
-int flashCount = 1;
-int state;
+#include <LiquidCrystal.h>
+#include <Keypad.h>
+#define SW_BIT  2  // A2 maps to PF2 (ADC Channel 2)
+#define VRY_CH  3  // A3 maps to PF3 (ADC Channel 3)
+#define VRX_CH  4  // A4 maps to PF4 (ADC Channel 4)
 
-void setup()
+#define ANALOG_X_CORRECTION 128
+#define ANALOG_Y_CORRECTION 128
+
+struct button {
+  byte pressed = 0;
+};
+
+struct analog {
+  short x, y;
+  button button;
+};
+unsigned char* ddr_a = (unsigned char*) 0x21;
+unsigned char* port_a = (unsigned char*) 0x22;
+unsigned char* pin_a = (unsigned char*) 0x20;
+
+unsigned char* ddr_b = (unsigned char*) 0x24;
+unsigned char* port_b = (unsigned char*) 0x25;
+unsigned char* pin_b = (unsigned char*) 0x23;
+
+
+unsigned char* ddr_c = (unsigned char*) 0x27;
+unsigned char* port_c = (unsigned char*) 0x28;
+unsigned char* pin_c = (unsigned char*) 0x26;
+
+unsigned char* ddr_d = (unsigned char*) 0x2A;
+unsigned char* port_d = (unsigned char*) 0x2B;
+unsigned char* pin_d = (unsigned char*) 0x29;
+
+unsigned char* ddr_f = (unsigned char*) 0x30;
+unsigned char* port_f = (unsigned char*) 0x31;
+unsigned char* pin_f = (unsigned char*) 0x2F;
+
+unsigned char* ddr_h = (unsigned char*) 0x101;
+unsigned char* port_h = (unsigned char*) 0x102;
+unsigned char* pin_h = (unsigned char*) 0x100;
+
+volatile unsigned char *myTCCR1A = (unsigned char *) 0x80;
+volatile unsigned char *myTCCR1B = (unsigned char *) 0x81;
+volatile unsigned char *myTCCR1C = (unsigned char *) 0x82;
+volatile unsigned char *myTIMSK1 = (unsigned char *) 0x6F;
+volatile unsigned int  *myTCNT1  = (unsigned  int *) 0x84;
+volatile unsigned char *myTIFR1 =  (unsigned char *) 0x36;
+
+const int rs = 2, en = 3, d4 = 4, d5 = 5, d6 = 6, d7 = 7;
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+
+const byte ROWS = 4; 
+const byte COLS = 4; 
+char keys[ROWS][COLS] = {
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
+};
+
+byte rowPins[ROWS] = {53, 52, 51, 50}; 
+byte colPins[COLS] = {49, 48, 47, 46};
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+
+void my_delay(unsigned int freq)
 {
-//PIN ASSIGNMENT We need to change it to manual pin registers but that comes later tbh
-  pinMode(10, OUTPUT);
-  pinMode(11, OUTPUT);
-  pinMode(12, OUTPUT);
-  pinMode(13, OUTPUT);
-  Serial.begin(9600);
-  Serial.println("Timer Started: 0");
+  // calc period
+  double period = 1.0/double(freq);
+  // 50% duty cycle
+  double half_period = period/2;
+  // clock period def
+  double clk_period = 0.0000000625;
+  // calc ticks
+  unsigned int ticks = half_period/clk_period;
+  // stop the timer
+  *myTCCR1B &= 0xF8;
+  // set the counts
+  *myTCNT1 = (unsigned int) (65536 - ticks); //check slide
+
+  * myTCCR1A = 0x0;
+  // start the timer
+  * myTCCR1B |= 0x01;
+  // wait for overflow
+  while((*myTIFR1 & 0x01)==0); 
+  // stop the timer
+  *myTCCR1B &= 0xF8;   
+  // reset TOV           
+  *myTIFR1 |= 0x01;
 }
 
-// Display Output Requirement 
-void loop()
-{
-  // Display Output Requirement (TIMER 1 MINUTE) - Prints Minutes Elapsed, Could use it to control the LED flashing
-  unsigned long currentMillis = millis();
-  if(currentMillis - previousMillis >= minInterval){
-    previousMillis = currentMillis;
-    minutesElapsed++;
-    Serial.print("Minutes Elapsed:" );
-	Serial.println(minutesElapsed);
+void timer1_delay_us(uint16_t us) {
+  TCNT1 = 0;               // Reset timer counter
+  uint16_t ticks = us * 2; // 2 MHz clock = 2 ticks per microsecond
+  while (TCNT1 < ticks);   // Poll until target is reached
+}
+
+void timer1_delay_ms(uint16_t ms) {
+  for (uint16_t i = 0; i < ms; i++) {
+    timer1_delay_us(1000); // Wait 1000 microseconds, 'ms' times
   }
-// State Creation: We gotta figure this part out
-  state = 4;
-  switch(state){
-    // OFF State
-    case 1:
-     digitalWrite(13, HIGH);
-    	break;
-    //IDLE State
-    case 2:
-    digitalWrite(13, LOW);
-    
-    	break;
-   //Active State
-    case 3:
-    	break;
-    //Error State
-    case 4:
-    error();
+}
+
+uint16_t adc_read(uint8_t channel) {
+  // Clear the older channel from ADMUX (bottom 3 bits) and set the new channel
+  ADMUX = (ADMUX & 0xF8) | (channel & 0x07); 
+
+  // Start the conversion by setting the ADSC (ADC Start Conversion) bit
+  ADCSRA |= (1 << ADSC);
+
+  // Wait for the conversion to complete (hardware clears ADSC when done)
+  while (ADCSRA & (1 << ADSC));
+
+  // The 10-bit result is stored across ADCL and ADCH. 
+  // The compiler automatically reads both when we call 'ADC'.
+  return ADC;
+}
+
+byte readAnalogAxisLevel(uint8_t channel) {
+  // Read the 10-bit value (0-1023) and shift right by 2 bits to get 8-bit (0-255).
+  // This is a much faster, register-level equivalent of map(val, 0, 1023, 0, 255).
+  return (adc_read(channel) >> 2);
+}
+
+bool isAnalogButtonPressed() {
+  // Read the Port F Input Pins (PINF) register.
+  // Mask it to check only bit 2. If it's 0 (LOW), the button is pressed.
+  return !(PINF & (1 << SW_BIT));
+}
+
+void setup() {
+
+TCCR1A = 0;              // Normal operation mode
+TCCR1B = (1 << CS11);    // Set prescaler to 8 (16MHz / 8 = 2MHz)
+TCNT1 = 0;               // Initialize counter to 0
+
+*ddr_f &= ~(0x01 << SW_BIT);
+*port_f |= (1 << SW_BIT);
+
+ADMUX = (1 << REFS0);
+ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
+
+*ddr_a |= 0x01 << 0; //Pin 22 Output
+*ddr_a |= 0x01 << 1; //Pin 23 Output
+*ddr_a |= 0x01 << 2; //Pin 24 Output
+*ddr_a |= 0x01 << 3; //Pin 25 Output
+
+*ddr_b |= 0x01 << 4; //Pin 10 Blue
+*ddr_b |= 0x01 << 5; //Pin 11 Buzzer
+*ddr_b |= 0x01 << 6; //Pin 12 red
+*ddr_h |= 0x01 << 5; //Pin 8 green
+*ddr_h |= 0x01 << 6; //Pin 9 Fan
+
+*ddr_a &= ~(0x01 << 4); //Pin 26 input Button player 1
+*port_a |= (0x01 << 4); // sets Pin 26 high
+*ddr_a &= ~(0x01 << 5); //Pin 27 input Button player 2
+*port_a |= (0x01 << 5); // sets Pin 27 high
+*ddr_a &= ~(0x01 << 6); //Pin 28 input Button player 3
+*port_a |= (0x01 << 6); // sets Pin 28 high
+*ddr_a &= ~(0x01 << 7); //Pin 29 input Button player 4
+*port_a |= (0x01 << 7); // sets Pin 29 high
+
+*ddr_c &= ~(0x01 << 7); //Pin 30 input Button Reset
+*port_c |= (0x01 << 7); // sets Pin 30 high
+
+*ddr_d &= ~(0x01 << 3); //Pin 18 input Button On
+*port_d |= (0x01 << 3); // sets Pin 18 high
+*ddr_d &= ~(0x01 << 2); //Pin 19 input Button Off
+*port_d |= (0x01 << 2); // sets Pin 19 high
+
+//*ddr_c &= ~(1 << 3);   // Pin 33 input
+//*port_c |= (1 << 3);   // Enable pull-up resistor
+
+//Signal to user to press start
+lcd.begin(16, 2);
+lcd.print("HELLO WORLD!");
+delay(1000);
+Serial.begin(9600);
+
+TCCR2A = 0;
+TCCR2B = 0;
+TCCR2A |= (1 << COM2B1) | (1 << WGM21) | (1 << WGM20);
+TCCR2B |= (1 << CS22);
+
+OCR2B = 0;
+
+
+}
+enum GameState {
+  WAIT_START,
+  SELECT_PLAYERS,
+  SELECT_ROUNDS,
+  COUNTDOWN,
+  WAIT_FOR_REACTION,
+  SHOW_WINNER
+};
+//game setup stuff that I add
+GameState state = WAIT_START;
+int numPlayers = 0;
+int numRounds = 0;
+//start button check
+
+
+//Waits for player input tbh
+void handleStart(){
+  *port_b |= (0x01 << 6); //RED LED ON
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("PRESS START:");
+  //while(!startButtonPressed());
+  timer1_delay_ms(1000);
+  //while(startButtonPressed());
+  //timer1_delay_ms(50);
+  lcd.clear();
+  //*port_b &= ~(0x01 << 6); //RED LEF OFF
+  state = SELECT_PLAYERS;
+}
+
+bool startButtonPressed(){
+  return !(*pin_c & (1 << 3));
+}
+//Player Select
+void handlePlayerSelect(){
+  lcd.print("PLAYERS 1-4:");
+  while(true){
+    char key = keypad.getKey();
+    if(key >= '1' && key <= '4'){
+      numPlayers = key - '0';
+      lcd.clear();
+      lcd.print("PLAYERS: ");
+      lcd.print(numPlayers);
+      timer1_delay_ms(1000);
+      lcd.clear();
+      state = SELECT_ROUNDS;
       break;
-  
-  
+    }
   }
 }
-void off(){
-  digitalWrite(13, HIGH);
+//Round Select
+void handleRoundSelect(){
+  lcd.print("ROUNDS 1-9:");
+  while(true){
+  char key = keypad.getKey();
+    if(key >= '1' && key <= '9'){
+      numRounds = key - '0';
+      lcd.clear();
+      lcd.print("ROUNDS 1-9: ");
+      lcd.print(numRounds);
+      timer1_delay_ms(1000);
+      state = COUNTDOWN;
+      break;
+    }
+    }
 }
-///Im trying to make flashing LED here but it might be easier to make it in the main and have a continuous 1 second timer that runs that we can switch to and use to change the light flashes
-void error(){
-  unsigned long currentFlash = millis();
-  if(currentFlash - previousFlash >= flashInterval){
-    flashCount++;
+int cnt = 1000;
+void handleCountdown(){
+  *port_b &= ~(0x01 << 6); //RED LED OFF
+  for(int i = 10; i >= 0; i--){
+    *port_h &= ~(0x01 << 5);
+    lcd.clear();
+    lcd.print("ROUND BEGINS: ");
+    lcd.print(i);
+    timer1_delay_ms(cnt);
+    *port_h |= (0x01 << 5); //(Led GREEN - HIGH)
+    timer1_delay_ms(cnt);
   }
-  if (flashCount % 2 == 0){
-      digitalWrite(13, HIGH);
-  }
-  if (flashCount % 2 != 0){
-     digitalWrite(13, LOW);
-  }
+  *port_h |= (0x01 << 5); //(Led GREEN - HIGH)
+  state = WAIT_FOR_REACTION;
+}
+void handleReactionGame(){
+  lcd.clear();
+  lcd.print("ROUND IN PROGRESS");
+  timer1_delay_ms(5000);
   
+
+  state = SHOW_WINNER;
+}
+int player = 1;
+void handleWinner(){
+  lcd.clear();
+  lcd.print("PLAYER: "); //(Led GREEN - HIGH)
+  lcd.print(player);
+  lcd.print(" WINS");
+  timer1_delay_ms(5000);
+}
+
+
+void loop() {
+  //timer1_delay_ms(200);
+  //OCR2B = 150;
+  //timer1_delay_ms(2000);
+  //OCR2B = 255;
+  //timer1_delay_ms(2000);
+  //OCR2B = 0;
+  //timer1_delay_ms(2000);
+  //while start button is not pressed do this
+  switch(state){
+    case WAIT_START:
+      handleStart();
+      break;
+    case SELECT_PLAYERS:
+      handlePlayerSelect();
+      break;
+    case SELECT_ROUNDS:
+      handleRoundSelect();
+      break;
+    case COUNTDOWN:
+      handleCountdown();
+      break;
+    case WAIT_FOR_REACTION:
+      handleReactionGame();
+      break;
+    case SHOW_WINNER:
+      handleWinner();
+      break;
+  }
+
+
+
+
+analog joystick;
+
+  // Read X (A4) and Y (A3)
+  joystick.x = readAnalogAxisLevel(VRX_CH) - ANALOG_X_CORRECTION;
+  joystick.y = readAnalogAxisLevel(VRY_CH) - ANALOG_Y_CORRECTION;
+
+  // Read Button (A2)
+  joystick.button.pressed = isAnalogButtonPressed();
+
+  Serial.print("X:");
+  Serial.println(joystick.x);
+
+  Serial.print("Y:");
+  Serial.println(joystick.y);
+
+  if (joystick.button.pressed) {
+    Serial.println("Button pressed");
+  } else {
+    Serial.println("Button not pressed");
+  }
+
+  timer1_delay_ms(200);
+
+
+  char key = keypad.getKey();
+  if(!(*pin_d & (0x01 << 3))){
+    Serial.println("On pressed");
+  }
+  if(!(*pin_d & (0x01 << 2))){
+    Serial.println("Off pressed");
+  }
+  if(!(*pin_c & (0x01 << 7))){
+    Serial.println("reset pressed");
+  }
+  if(!(*pin_a & (0x01 << 4))) { //reading if button P1 is pressed
+    *port_a |= (0x01 << 1); //Turn on LED P1
+  }
+  else{
+          // Button P1 released
+          *port_a &= ~(0x01 << 1); // Turn off LED P1
+      }
+  if(!(*pin_a & (0x01 << 6))) { //reading if button P3 is pressed
+    *port_a |= (0x01 << 2); //Turn on LED P3
+  }
+  else{
+          // Button P3 released
+          *port_a &= ~(0x01 << 2); // Turn off LED P3
+      }
+  if(!(*pin_a & (0x01 << 5))){ //reading if button P2 is pressed
+    *port_a |= (0x01 << 0); //Turn on LED P2
+  }
+  else{
+    *port_a &= ~(0x01 << 0);
+  }
+  if(!(*pin_a & (0x01 << 7))){ //reading if button P2 is pressed
+    *port_a |= (0x01 << 3); //Turn on LED P2
+  }
+  else{
+    *port_a &= ~(0x01 << 3);
+  }
+  if(key){
+    Serial.println(key);
+    lcd.clear();
+    lcd.print("Key: ");
+    lcd.print(key);
+    if(key == '1'){
+      //*port_a |= (0x01 << 1); //(Led 1 - HIGH)
+      //*port_a |= (0x01 << 0); //(Led 2 - HIGH)
+      //*port_a |= (0x01 << 2); //(Led 3 - HIGH)
+      //*port_a |= (0x01 << 3); //(Led 4 - HIGH)
+
+      *port_b |= (0x01 << 4); //(Led BLUE - HIGH)
+      *port_b |= (0x01 << 6); //(Led RED - HIGH)
+      *port_h |= (0x01 << 5); //(Led GREEN - HIGH)
+      for(int i = 0; i < 100; i++){ 
+        *port_b |= (0x01 << 5); // Buzzer ON
+        my_delay(750);
+        *port_b &= ~(0x01 << 5); // Buzzer OFF
+        my_delay(750);
+      }
+      //*port_a &= ~(0x01 << 1); //(Led 1 - low)
+      //*port_a &= ~(0x01 << 0); //(Led 2 - low)
+      //*port_a &= ~(0x01 << 2); //(Led 3 - low)
+      //*port_a &= ~(0x01 << 3); //(Led 4 - low)
+      
+
+      Serial.print(key);
+    }
+  }
+
 }
 
 
