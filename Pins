@@ -7,17 +7,14 @@ Digital Pins:
   Corner LEDS: 22-25
   Corner Buttons: 26-29
   Green LED: 8
-  Red LED: 9
+  Red LED: 12
   blue LED: 10
-  ON botton: 18
+  ON botton: 34
   Off botton: 19
   Reset Botton: 30
-  Temp module: 12
   Buzzer: 11
-  Fan: 13
-  RTC SDA:20
-  RTC SCL=21
+  Fan: 9
 Analog Pins:
-  Vrx = 1
-  Vry = 0
-  Sw = 2
+  Vrx = A4
+  Vry = A3
+  Sw = A2
