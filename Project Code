@@ -107,7 +107,6 @@ int numPlayers = 0;
 int numRounds = 0;
 int currentRound = 0;
 
-// Mapping Enum to Strings for logging
 const char* stateStrings[] = {
   "WAIT_START", "SELECT_PLAYERS", "SELECT_ROUNDS", "COUNTDOWN",
   "WAIT_FOR_REACTION", "SHOW_WINNER", "SYSTEM_OFF", "ERROR_STATE"
@@ -197,9 +196,23 @@ unsigned char bcd_to_dec(unsigned char val) {
   return (val / 16 * 10) + (val % 16);
 }
 
-// ---------------------------------------------------------
-// NEW LOGGING SYSTEM
-// ---------------------------------------------------------
+// NEW: Decimal to BCD converter for setting the time
+unsigned char dec_to_bcd(unsigned char val) {
+  return ((val / 10) * 16) + (val % 10);
+}
+
+// NEW: Function to write the time to the RTC
+void setRTC(unsigned char hr, unsigned char min, unsigned char sec) {
+  twi_start();
+  twi_write(0xD0); 
+  twi_write(0x00); 
+  
+  twi_write(dec_to_bcd(sec)); 
+  twi_write(dec_to_bcd(min)); 
+  twi_write(dec_to_bcd(hr));  
+  
+  twi_stop();
+}
 
 void printTimestamp() {
   twi_start();
@@ -259,7 +272,6 @@ void logPeriodicData() {
     uart_print("\r\n---------------------------\r\n");
   }
 }
-// ---------------------------------------------------------
 
 void my_delay(unsigned int freq) {
   double period = 1.0/double(freq);
@@ -356,6 +368,17 @@ void setup() {
   OCR2B = 0;
   
   twi_init();
+
+  // ========================================================
+  // RTC SETUP: Change the numbers to the exact current time
+  // FORMAT: setRTC(Hour_24, Minute, Second);
+  // Example: 3:00 PM is 15, 0, 0
+  //
+  // 1. Upload this code once to set the time.
+  // 2. Put // in front of setRTC and upload AGAIN!
+  // ========================================================
+  
+  setRTC(15, 0, 0); 
   
   logEvent("SYSTEM", "Boot successful.");
 }
@@ -468,7 +491,7 @@ void handleError() {
 }
 
 void updateFanSpeed() {
-  static bool fanIsCurrentlyOn = false; // Prevents log flooding
+  static bool fanIsCurrentlyOn = false; 
   
   if (fanModeEnabled && state == WAIT_START) {
     byte y_val = readAnalogAxisLevel(VRY_CH); 
@@ -600,9 +623,9 @@ void handleCountdown() {
     lcd.print("ROUND BEGINS: ");
     lcd.print(i);
     timer1_delay_ms(500);
-    *port_h |= (0x01 << 5); // Warning LED/Buzzer ON
+    *port_h |= (0x01 << 5); 
     timer1_delay_ms(500);
-    *port_h &= ~(0x01 << 5); // Warning LED/Buzzer OFF
+    *port_h &= ~(0x01 << 5); 
   }
   
   *port_h |= (0x01 << 5);
