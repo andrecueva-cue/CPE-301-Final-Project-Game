@@ -10,6 +10,13 @@
 bool fanModeEnabled = false;
 int player = 0;
 
+bool startDrawn = false;
+bool playerDrawn = false;
+bool roundScreenDrawn = false;
+bool gameStarted = false;
+bool winnerDrawn = false;
+bool errorDrawn = false;
+
 struct button {
   byte pressed = 0;
 };
@@ -126,7 +133,11 @@ void twi_init() {
 
 void twi_start() {
   *myTWCR = (1 << 7) | (1 << 5) | (1 << 2);
-  while(!(*myTWCR & (1 << 7)));
+  unsigned int timeout = 10000;
+  while(!(*myTWCR & (1 << 7)) && timeout > 0) {
+      timeout--;
+  }
+  if (timeout == 0) return; 
 }
 
 void twi_stop() {
@@ -136,18 +147,27 @@ void twi_stop() {
 void twi_write(unsigned char data) {
   *myTWDR = data;
   *myTWCR = (1 << 7) | (1 << 2);
-  while(!(*myTWCR & (1 << 7)));
+  unsigned int timeout = 10000;
+  while(!(*myTWCR & (1 << 7)) && timeout > 0) {
+      timeout--;
+  }
 }
 
 unsigned char twi_read_ack() {
   *myTWCR = (1 << 7) | (1 << 6) | (1 << 2);
-  while(!(*myTWCR & (1 << 7)));
+  unsigned int timeout = 10000;
+  while(!(*myTWCR & (1 << 7)) && timeout > 0) {
+      timeout--;
+  }
   return *myTWDR;
 }
 
 unsigned char twi_read_nack() {
   *myTWCR = (1 << 7) | (1 << 2);
-  while(!(*myTWCR & (1 << 7)));
+  unsigned int timeout = 10000;
+  while(!(*myTWCR & (1 << 7)) && timeout > 0) {
+      timeout--;
+  }
   return *myTWDR;
 }
 
@@ -302,16 +322,13 @@ int currentRound = 0;
 
 void checkGlobalButtons() {
   static bool systemCurrentlyOff = false;
-  static bool buttonWasPressed = false; // Remembers the button state
+  static bool buttonWasPressed = false; 
   
-  // Read Pin 19 (Port D, Bit 2)
   bool buttonIsPressed = !(*pin_d & (0x01 << 2));
 
-  // Only trigger if the button is currently pressed AND it wasn't pressed a millisecond ago
   if (buttonIsPressed && !buttonWasPressed) { 
     
     if (!systemCurrentlyOff) {
-      // --- SHUTDOWN SEQUENCE ---
       lcd.clear();
       *port_a &= ~(0x0F); 
       *port_b &= ~((0x01 << 4) | (0x01 << 5) | (0x01 << 6)); 
@@ -319,11 +336,9 @@ void checkGlobalButtons() {
       state = SYSTEM_OFF;
       systemCurrentlyOff = true;
     } else {
-      // --- WAKE UP SEQUENCE ---
       lcd.clear();
-      *port_b |= (0x01 << 6); // Turn Red LED back on
+      *port_b |= (0x01 << 6); 
       
-      // Manually draw the Start Menu
       lcd.print("START: BTN");
       lcd.setCursor(0, 1);
       if (fanModeEnabled) {
@@ -332,36 +347,50 @@ void checkGlobalButtons() {
         lcd.print("FAN: OFF(Prs B)");
       }
       
+      startDrawn = true;
+      playerDrawn = false;
+      roundScreenDrawn = false;
+      gameStarted = false;
+      winnerDrawn = false;
+      errorDrawn = false;
+      
       state = WAIT_START;
       systemCurrentlyOff = false;
     }
     
-    // Quick pause so the metal spring inside the button doesn't double-click
     timer1_delay_ms(200); 
   }
 
-  // Save the current state of the button for the next time the loop runs
   buttonWasPressed = buttonIsPressed;
 
-  // If the system is currently off, exit the function right here so the reset button is ignored
   if (systemCurrentlyOff) {
     return;
   }
 
-  // 2. Check RESET Button (Pin 30 -> Port C, Bit 7)
   if (!(*pin_c & (0x01 << 7))) {
     if (state != SYSTEM_OFF && state != SELECT_PLAYERS) {
        lcd.clear();
        currentRound = 1;
+
+       startDrawn = false;
+       playerDrawn = false;
+       roundScreenDrawn = false;
+       gameStarted = false;
+       winnerDrawn = false;
+       errorDrawn = false;
+       
        state = SELECT_PLAYERS;
     }
   }
 }
+
 void handleSystemOff() {
+  *port_b |= (0x01 << 6);
+  lcd.clear();
+  lcd.begin(16, 2);
 }
 
 void handleError() {
-  static bool errorDrawn = false;
   static unsigned long errorStartTime = 0;
 
   if (!errorDrawn) {
@@ -390,6 +419,7 @@ void handleError() {
     
     currentRound = 0;
     lcd.clear();
+    startDrawn = false;
     state = WAIT_START;
   }
 }
@@ -424,11 +454,10 @@ bool startButtonPressed() {
   return false;
 }
 
-void handleStart() {
-  static bool startDrawn = false;
-  
+void handleStart() {  
+  *port_b &= ~(0x01 << 6);
+  *port_b |= (0x01 << 4);
   if (!startDrawn) {
-    *port_b |= (0x01 << 6);
     *port_a &= ~(0x0F); 
     lcd.clear();
     lcd.print("START: BTN");
@@ -449,13 +478,14 @@ void handleStart() {
   }
 
   if (startButtonPressed()) {
+    *port_b &= ~(0x01 << 4);
+    *port_h |= (0x01 << 5);
     startDrawn = false;
     state = SELECT_PLAYERS;
   }
 }
 
 void handlePlayerSelect() {
-  static bool playerDrawn = false;
   
   if (!playerDrawn) {
     lcd.clear();
@@ -477,8 +507,6 @@ void handlePlayerSelect() {
 }
 
 void handleRoundSelect() {
-  static bool roundScreenDrawn = false;
-
   if (!roundScreenDrawn) {
     lcd.clear();
     lcd.print("ROUNDS 1-9: ");
@@ -530,14 +558,13 @@ void handleCountdown() {
 }
 
 void handleReactionGame() {
-  static bool gameStarted = false;
   static unsigned long startTime = 0;
 
   if (!gameStarted) {
     lcd.clear();
-    lcd.print("GO! PRESS IT!");
+    lcd.print("GO!");
     
-    for(int i = 0; i < 50; i++){ 
+    for(int i = 0; i < 100; i++){ 
         *port_b |= (0x01 << 5);
         my_delay(750);
         *port_b &= ~(0x01 << 5);
@@ -584,7 +611,6 @@ void handleReactionGame() {
 }
 
 void handleWinner() {
-  static bool winnerDrawn = false;
   static unsigned long displayStartTime = 0;
 
   if (!winnerDrawn) {
@@ -625,6 +651,7 @@ void handleWinner() {
       *port_h &= ~(0x01 << 5);
       timer1_delay_ms(2000);
       
+      startDrawn = false;
       state = WAIT_START; 
     }
   }
