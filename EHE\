@@ -1,37 +1,49 @@
-void handleWinner() {
-  static bool winnerDrawn = false;
-  static unsigned long displayStartTime = 0;
+void handleReactionGame() {
+  static bool gameStarted = false;
+  static unsigned long startTime = 0;
 
-  // 1. Draw the winner screen ONCE
-  if (!winnerDrawn) {
+  // 1. Draw the screen and start the timer ONCE when entering the state
+  if (!gameStarted) {
     lcd.clear();
-    lcd.print("PLAYER ");
-    lcd.print(player);
-    lcd.print(" WINS RND ");
-    lcd.print(currentRound); // Optional: show which round they won
-    
-    displayStartTime = millis(); // Start the display timer
-    winnerDrawn = true;
+    lcd.print("GO! PRESS IT!");
+    startTime = millis(); // Capture the exact start time
+    gameStarted = true;
   }
 
-  // 2. Wait 3 seconds (3000 ms) without blocking the CPU
-  if (millis() - displayStartTime >= 3000) {
+  // 2. Take a simultaneous snapshot of all Port A pins.
+  // This grabs the state of all buttons in a single clock cycle.
+  byte portA_snapshot = *pin_a; 
+
+  // 3. Extract the individual player states from the snapshot.
+  // Note: Your earlier code used pins 26-29 (bits 4, 5, 6, 7). 
+  // If you moved them to pins 24-27, change the shifts to (2, 3, 4, 5).
+  bool p1_pressed = !(portA_snapshot & (0x01 << 4));
+  bool p2_pressed = !(portA_snapshot & (0x01 << 5));
+  bool p3_pressed = !(portA_snapshot & (0x01 << 6));
+  bool p4_pressed = !(portA_snapshot & (0x01 << 7));
+
+  // 4. Check if ANY player has pressed their button
+  if (p1_pressed || p2_pressed || p3_pressed || p4_pressed) {
     
-    winnerDrawn = false; // Reset the flag for the next time this state runs
+    // Calculate the total reaction time
+    unsigned long reactionTime = millis() - startTime;
     
-    // 3. The Routing Logic
-    if (currentRound < numRounds) {
-      // Still have rounds left to play!
-      currentRound++;
-      state = COUNTDOWN; 
-    } else {
-      // All rounds complete!
-      lcd.clear();
-      lcd.print("GAME OVER!");
-      timer1_delay_ms(2000); // A quick blocking delay is okay here for game over
-      
-      // Reset the game back to the very beginning
-      state = WAIT_START; 
-    }
+    // Determine the winner (in a true multi-button tie, P1 still gets priority here, 
+    // but the read itself was fair).
+    if (p1_pressed) player = 1;
+    else if (p2_pressed) player = 2;
+    else if (p3_pressed) player = 3;
+    else if (p4_pressed) player = 4;
+
+    // Optional: Show the exact reaction time before moving to the winner screen
+    lcd.clear();
+    lcd.print("TIME: ");
+    lcd.print(reactionTime);
+    lcd.print(" ms");
+    timer1_delay_ms(1500); 
+
+    // Reset the flag for the next round and move to the winner state
+    gameStarted = false; 
+    state = SHOW_WINNER;
   }
 }
