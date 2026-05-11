@@ -5,4 +5,4 @@ Group Members:
 David Estrada Chavez,
 Garren Graves,
 Andres Cuevas III,
-Alfredo Torres Sanchez,
+Alfredo Torres Sanchez
