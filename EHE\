@@ -1,0 +1,37 @@
+void handleWinner() {
+  static bool winnerDrawn = false;
+  static unsigned long displayStartTime = 0;
+
+  // 1. Draw the winner screen ONCE
+  if (!winnerDrawn) {
+    lcd.clear();
+    lcd.print("PLAYER ");
+    lcd.print(player);
+    lcd.print(" WINS RND ");
+    lcd.print(currentRound); // Optional: show which round they won
+    
+    displayStartTime = millis(); // Start the display timer
+    winnerDrawn = true;
+  }
+
+  // 2. Wait 3 seconds (3000 ms) without blocking the CPU
+  if (millis() - displayStartTime >= 3000) {
+    
+    winnerDrawn = false; // Reset the flag for the next time this state runs
+    
+    // 3. The Routing Logic
+    if (currentRound < numRounds) {
+      // Still have rounds left to play!
+      currentRound++;
+      state = COUNTDOWN; 
+    } else {
+      // All rounds complete!
+      lcd.clear();
+      lcd.print("GAME OVER!");
+      timer1_delay_ms(2000); // A quick blocking delay is okay here for game over
+      
+      // Reset the game back to the very beginning
+      state = WAIT_START; 
+    }
+  }
+}
